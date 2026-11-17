@@ -11,4 +11,4 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite. Online rooms require an internet connection.
+Open the local URL printed by Vite. To play online, both players need an internet connection. One player creates a room and shares its six-character code; the other selects **Join room** and enters that code.

@@ -32,8 +32,11 @@ const state = {
   flipped: false,
   peer: null,
   connection: null,
+  connectionTimeout: null,
   side: 'w',
   roomCode: '',
+  onlineStatus: '',
+  onlineError: '',
   started: false,
   gameOver: false,
   thinking: false,
@@ -82,7 +85,7 @@ function render() {
       const isSelected = state.selected === square;
       const isCheck = piece?.type === 'k' && piece.color === turn && game.isCheck();
       const labels = `${square}${piece ? ` ${piece.color === 'w' ? 'white' : 'black'} ${piece.type}` : ''}`;
-      return `<button class="square ${isLight ? 'light' : 'dark'} ${isLast ? 'last-move' : ''} ${isSelected ? 'selected' : ''} ${isCheck ? 'in-check' : ''}" data-square="${square}" aria-label="${labels}" ${!state.started || state.gameOver || state.thinking ? 'disabled' : ''}>
+      return `<button class="square ${isLight ? 'light' : 'dark'} ${isLast ? 'last-move' : ''} ${isSelected ? 'selected' : ''} ${isCheck ? 'in-check' : ''}" data-square="${square}" aria-label="${labels}" ${!state.started || state.gameOver || state.thinking || (state.mode === 'online' && (state.onlineStatus !== 'connected' || turn !== state.side)) ? 'disabled' : ''}>
         ${piece ? `<span class="piece ${piece.color === 'w' ? 'white-piece' : 'black-piece'}">${flatPieceGlyph[piece.color][piece.type]}</span>` : ''}
         ${state.showMoveGuide && state.legalMoves.some((move) => move.to === square) ? `<span class="move-dot ${piece ? 'capture-dot' : ''}"></span>` : ''}
         ${col === 0 ? `<span class="coordinate rank-coordinate">${rank}</span>` : ''}
@@ -108,7 +111,7 @@ function render() {
   app.innerHTML = `
     <header class="topbar">
       <a class="brand" href="#" aria-label="Chess Club home"><span class="brand-mark">♞</span><span>chess<span class="brand-light">club</span></span></a>
-      <div class="topbar-center"><span class="live-dot"></span><span>${state.mode === 'online' && state.connection ? 'CONNECTED' : state.started ? 'GAME IN PROGRESS' : 'READY TO PLAY'}</span></div>
+      <div class="topbar-center"><span class="live-dot"></span><span>${state.mode === 'online' && state.onlineStatus === 'connected' ? 'CONNECTED' : state.started ? 'GAME IN PROGRESS' : 'READY TO PLAY'}</span></div>
       <button class="icon-button profile-button" id="profile-button" aria-label="Edit player names" title="Edit player names"><span>${escapeHtml(getInitials(profileName))}</span></button>
     </header>
     <main class="layout">
@@ -126,7 +129,7 @@ function render() {
         <div class="panel-section setup-section"><div class="section-title">GAME SETTINGS</div>
           ${state.mode === 'computer' ? `<div class="setting-row"><div class="setting-copy"><strong>Difficulty</strong><span>Choose your opponent</span></div><div class="segmented difficulty-control">${Object.keys(levels).map((level) => `<button data-difficulty="${level}" class="${state.difficulty === level ? 'active-segment' : ''}">${level}</button>`).join('')}</div></div>` : ''}
           <div class="setting-row"><div class="setting-copy"><strong>Time control</strong><span>${durations[state.timeControl] ? 'Per player' : 'Untimed game'}</span></div><div class="time-grid">${Object.keys(durations).map((time) => `<button data-time="${time}" class="time-option ${state.timeControl === time ? 'active-time' : ''}">${time === 'No limit' ? '∞' : time}<span>${time === 'No limit' ? 'No limit' : 'each'}</span></button>`).join('')}</div></div>
-          <button class="start-button" id="start-button"><i data-lucide="${state.started && !state.gameOver ? 'rotate-ccw' : 'play'}"></i><span>${state.started && !state.gameOver ? 'New game' : state.gameOver ? 'Play again' : 'Start game'}</span></button>
+          <button class="start-button" id="start-button" ${state.mode === 'online' && state.onlineStatus !== 'connected' ? 'disabled' : ''}><i data-lucide="${state.started && !state.gameOver ? 'rotate-ccw' : 'play'}"></i><span>${state.started && !state.gameOver ? 'New game' : state.gameOver ? 'Play again' : 'Start game'}</span></button>
         </div>
         <div class="panel-section moves-section"><div class="section-heading"><div class="section-title">MOVE HISTORY</div><span class="move-count">${history.length} PLY</span></div><div class="move-list" id="move-list">${moveRows.length ? moveRows.join('') : '<div class="empty-moves">Your first move is waiting.</div>'}</div><div class="move-actions"><button class="text-action" id="undo-button" ${history.length && !state.thinking ? '' : 'disabled'}><i data-lucide="undo-2"></i>Undo</button><button class="text-action" id="resign-button" ${state.gameOver || !history.length ? 'disabled' : ''}><i data-lucide="flag"></i>Resign</button></div></div>
         <div class="panel-footer"><span class="secure-icon"><i data-lucide="shield-check"></i></span><span>${state.mode === 'online' ? 'Peer-to-peer connection' : 'Your games stay on this device'}</span><button class="icon-button small-icon" title="Game information" aria-label="Game information"><i data-lucide="info"></i></button></div>
@@ -134,7 +137,7 @@ function render() {
     </main>
     <footer class="page-footer"><span>CHESS CLUB <span class="footer-dot">·</span> PLAY YOUR WAY</span><span>Created by Shubham Nama</span></footer>
     <div id="promotion-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-label="Choose promotion"><div class="promotion-dialog"><div class="section-title">PROMOTE PAWN</div><div class="promotion-options">${['q', 'r', 'b', 'n'].map((type) => `<button data-promote="${type}" aria-label="Promote to ${type}">${pieceGlyph[turn][type]}</button>`).join('')}</div></div></div>
-    <div id="join-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="join-dialog-title"><form class="join-dialog" id="join-room-form"><div class="section-title" id="join-dialog-title">JOIN A FRIEND</div><label for="room-code-input">Room code</label><input id="room-code-input" name="roomCode" autocomplete="off" maxlength="6" placeholder="ABC123" required /><div class="dialog-actions"><button class="text-action" type="button" id="cancel-join-button">Cancel</button><button class="start-button" type="submit"><i data-lucide="log-in"></i>Join room</button></div></form></div>
+    <div id="join-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="join-dialog-title"><form class="join-dialog" id="join-room-form"><div class="section-title" id="join-dialog-title">JOIN A FRIEND</div><label for="room-code-input">Room code</label><input id="room-code-input" name="roomCode" autocomplete="off" autocapitalize="characters" maxlength="6" pattern="[A-Za-z0-9]{6}" placeholder="ABC123" required /><div class="dialog-actions"><button class="text-action" type="button" id="cancel-join-button">Cancel</button><button class="start-button" type="submit"><i data-lucide="log-in"></i>Join room</button></div></form></div>
     <div id="profile-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title"><form class="profile-dialog" id="profile-form"><div class="section-title" id="profile-dialog-title">PLAYER NAMES</div><label for="profile-name-input">${state.mode === 'local' ? 'White player' : 'Your name'}</label><input id="profile-name-input" name="playerName" maxlength="18" autocomplete="nickname" value="${escapeHtml(state.names[profileColor])}" required />${state.mode === 'local' ? `<label for="second-player-name-input">Black player</label><input id="second-player-name-input" name="secondPlayerName" maxlength="18" autocomplete="off" value="${escapeHtml(state.names.b)}" required />` : ''}<div class="dialog-actions"><button class="text-action" type="button" id="cancel-profile-button">Cancel</button><button class="start-button" type="submit"><i data-lucide="check"></i>Save names</button></div></form></div>
   `;
 
@@ -164,7 +167,7 @@ function render() {
       if (secondName) state.names.b = secondName;
       localStorage.setItem('chessclub-player-black', state.names.b);
     }
-    if (state.mode === 'online' && state.connection) state.connection.send({ type: 'profile', name: profileName });
+    if (state.mode === 'online' && state.connection?.open) state.connection.send({ type: 'profile', name: profileName });
     render();
   });
   app.querySelector('#new-game-button').addEventListener('click', resetGame);
@@ -196,7 +199,17 @@ function render() {
 }
 
 function renderOnlinePanel() {
-  return `<div class="online-panel"><div class="section-title">PLAY WITH A FRIEND</div><div class="online-actions"><button class="secondary-button" id="create-room-button"><i data-lucide="plus"></i>Create room</button><button class="secondary-button" id="join-room-button"><i data-lucide="log-in"></i>Join room</button></div>${state.roomCode ? `<div class="room-code-box"><span>ROOM CODE</span><strong>${escapeHtml(state.roomCode)}</strong><button class="icon-button copy-button" id="copy-code-button" aria-label="Copy room code" title="Copy room code"><i data-lucide="copy"></i></button></div>${state.connection ? '<div class="connection-label"><span class="live-dot"></span>Friend connected</div>' : '<div class="connection-label waiting-label"><span class="waiting-dot"></span>Waiting for your friend…</div>'}` : ''}</div>`;
+  const status = {
+    creating: 'Creating room…',
+    waiting: 'Waiting for your friend…',
+    connecting: 'Connecting to your friend…',
+    reconnecting: 'Reconnecting…',
+    connected: 'Friend connected',
+    disconnected: 'Connection lost. Join the room again to reconnect.',
+    error: state.onlineError,
+  }[state.onlineStatus];
+  const statusClass = state.onlineStatus === 'connected' ? '' : state.onlineStatus === 'error' || state.onlineStatus === 'disconnected' ? ' connection-error' : ' waiting-label';
+  return `<div class="online-panel"><div class="section-title">PLAY WITH A FRIEND</div><p class="online-description">Create a room and share its 6-character code, or enter your friend’s code to join.</p><div class="online-actions"><button class="secondary-button" id="create-room-button"><i data-lucide="plus"></i>Create room</button><button class="secondary-button" id="join-room-button"><i data-lucide="log-in"></i>Join room</button></div>${state.roomCode ? `<div class="room-code-box"><span>ROOM CODE</span><strong>${escapeHtml(state.roomCode)}</strong><button class="icon-button copy-button" id="copy-code-button" aria-label="Copy room code" title="Copy room code"><i data-lucide="copy"></i></button></div>` : ''}${status ? `<div class="connection-label${statusClass}"><span class="${state.onlineStatus === 'connected' ? 'live-dot' : 'waiting-dot'}"></span>${escapeHtml(status)}</div>` : ''}</div>`;
 }
 
 function bindOnlinePanel() {
@@ -215,6 +228,9 @@ function bindOnlinePanel() {
     event.preventDefault();
     dialog.classList.add('hidden');
     joinRoom(app.querySelector('#room-code-input').value);
+  });
+  app.querySelector('#room-code-input')?.addEventListener('input', (event) => {
+    event.target.value = event.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase();
   });
   copy?.addEventListener('click', async () => {
     try {
@@ -255,12 +271,13 @@ function resetGame(announce = true) {
   state.gameOver = false;
   state.thinking = false;
   if (state.mode !== 'online') state.side = 'w';
-  if (announce && state.connection) state.connection.send({ type: 'reset', timeControl: state.timeControl });
+  if (announce && state.connection?.open) state.connection.send({ type: 'reset', timeControl: state.timeControl });
   startClock();
   render();
 }
 
 function startGame() {
+  if (state.mode === 'online' && state.onlineStatus !== 'connected') return;
   if (state.started && !state.gameOver) {
     resetGame();
     return;
@@ -269,22 +286,65 @@ function startGame() {
   state.started = true;
   state.gameOver = false;
   startClock();
-  if (state.connection) state.connection.send({ type: 'start', timeControl: state.timeControl });
+  if (state.connection?.open) state.connection.send({ type: 'start', timeControl: state.timeControl });
   render();
 }
 
 function setMode(mode) {
   if (state.mode === mode) return;
-  if (state.peer) {
-    state.connection?.close();
-    state.peer.destroy();
-  }
-  state.peer = null;
-  state.connection = null;
+  closeOnlineSession();
   state.roomCode = '';
+  state.onlineStatus = '';
+  state.onlineError = '';
   state.remoteName = 'Opponent';
   state.mode = mode;
   resetGame();
+}
+
+function closeOnlineSession() {
+  clearTimeout(state.connectionTimeout);
+  state.connectionTimeout = null;
+  const connection = state.connection;
+  const peer = state.peer;
+  state.connection = null;
+  state.peer = null;
+  connection?.close();
+  peer?.destroy();
+}
+
+function failOnlineSession(message) {
+  closeOnlineSession();
+  state.onlineStatus = 'error';
+  state.onlineError = message;
+  render();
+}
+
+function startConnectionTimeout(peer, connection = null) {
+  clearTimeout(state.connectionTimeout);
+  state.connectionTimeout = setTimeout(() => {
+    if (state.peer !== peer || (connection && state.connection !== connection)) return;
+    failOnlineSession(connection
+      ? 'Could not connect to that room. Check the code and try again.'
+      : 'The connection timed out. Check your internet and try again.');
+  }, 20000);
+}
+
+function reconnectPeer(peer) {
+  if (state.peer !== peer) return;
+  if (!state.connection?.open) {
+    state.onlineStatus = 'reconnecting';
+    if (!state.connectionTimeout) startConnectionTimeout(peer, state.connection);
+    render();
+  }
+  if (!peer.disconnected) return;
+  try {
+    peer.reconnect();
+  } catch (error) {
+    console.error('Could not reconnect to the signaling server:', error);
+    if (!state.connection?.open) {
+      failOnlineSession('Could not reconnect. Check your internet and try again.');
+    }
+  }
 }
 
 function startClock() {
@@ -311,7 +371,7 @@ function updateClock() {
 }
 
 function handleSquareClick(square) {
-  if (!state.started || state.gameOver || state.thinking || (state.mode === 'online' && state.game.turn() !== state.side)) return;
+  if (!state.started || state.gameOver || state.thinking || (state.mode === 'online' && (state.onlineStatus !== 'connected' || state.game.turn() !== state.side))) return;
   const piece = state.game.get(square);
   if (state.selected && state.legalMoves.some((move) => move.to === square)) {
     const candidate = state.legalMoves.find((move) => move.to === square);
@@ -345,7 +405,7 @@ function makeMove(move) {
     state.selected = null;
     state.legalMoves = [];
     state.gameOver = state.game.isGameOver();
-    if (state.connection) state.connection.send({ type: 'move', move: { from: result.from, to: result.to, promotion: result.promotion } });
+    if (state.connection?.open) state.connection.send({ type: 'move', move: { from: result.from, to: result.to, promotion: result.promotion } });
     if (state.gameOver) clearInterval(state.timer);
     render();
     if (state.mode === 'computer' && !state.gameOver && state.game.turn() === 'b') scheduleComputerMove();
@@ -457,69 +517,150 @@ function resign() {
 }
 
 function createRoom() {
-  if (state.peer) state.peer.destroy();
+  closeOnlineSession();
   state.side = 'w';
   state.remoteName = 'Opponent';
-  state.roomCode = Math.random().toString(36).slice(2, 8).toUpperCase();
-  state.peer = new Peer(`chessclub-${state.roomCode}`);
+  state.onlineError = '';
+  state.onlineStatus = 'creating';
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  state.roomCode = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+  let peer;
+  try {
+    peer = new Peer(`chessclub-${state.roomCode}`);
+  } catch (error) {
+    console.error('Could not create online room:', error);
+    state.roomCode = '';
+    failOnlineSession('Could not create the room. Check your internet connection and try again.');
+    return;
+  }
+  state.peer = peer;
   resetGame(false);
-  state.peer.on('open', () => render());
-  state.peer.on('connection', (connection) => {
+  startConnectionTimeout(peer);
+  peer.on('open', () => {
+    if (state.peer !== peer) return;
+    if (state.connection?.open) {
+      clearTimeout(state.connectionTimeout);
+      state.connectionTimeout = null;
+      state.onlineStatus = 'connected';
+    } else if (state.connection) {
+      state.onlineStatus = 'connecting';
+      startConnectionTimeout(peer, state.connection);
+    } else {
+      clearTimeout(state.connectionTimeout);
+      state.connectionTimeout = null;
+      state.onlineStatus = 'waiting';
+    }
+    render();
+  });
+  peer.on('disconnected', () => reconnectPeer(peer));
+  peer.on('connection', (connection) => {
+    if (state.peer !== peer) {
+      connection.close();
+      return;
+    }
+    if (state.connection) {
+      connection.close();
+      return;
+    }
     state.connection = connection;
+    state.onlineStatus = 'connecting';
+    startConnectionTimeout(peer, connection);
     wireConnection(connection);
     render();
   });
-  state.peer.on('error', (error) => {
+  peer.on('error', (error) => {
+    if (state.peer !== peer) return;
     console.error('Online room error:', error);
-    window.alert('Could not create the room. Check your internet connection and try again.');
+    if (error.type === 'network' || error.type === 'socket-error' || error.type === 'socket-closed') {
+      reconnectPeer(peer);
+      return;
+    }
     state.roomCode = '';
-    render();
+    failOnlineSession(error.type === 'unavailable-id'
+      ? 'That room code is already in use. Create a new room.'
+      : 'Could not create the room. Check your internet connection and try again.');
   });
   render();
 }
 
 function joinRoom(code) {
-  if (!code?.trim()) return;
+  if (!/^[a-z0-9]{6}$/i.test(code?.trim() ?? '')) {
+    state.onlineStatus = 'error';
+    state.onlineError = 'Enter the 6-character room code your friend shared.';
+    render();
+    return;
+  }
   const normalized = code.trim().toUpperCase();
-  if (state.peer) state.peer.destroy();
+  closeOnlineSession();
   state.side = 'b';
   state.remoteName = 'Opponent';
   state.roomCode = normalized;
-  state.peer = new Peer();
+  state.onlineStatus = 'connecting';
+  state.onlineError = '';
+  let peer;
+  try {
+    peer = new Peer();
+  } catch (error) {
+    console.error('Could not connect online:', error);
+    failOnlineSession('Could not connect. Check your internet connection and try again.');
+    return;
+  }
+  state.peer = peer;
   resetGame(false);
-  state.peer.on('open', () => {
-    state.connection = state.peer.connect(`chessclub-${normalized}`, { reliable: true });
-    state.connection.on('open', () => {
-      wireConnection(state.connection);
+  startConnectionTimeout(peer);
+  peer.on('open', () => {
+    if (state.peer !== peer) return;
+    if (state.connection) {
+      if (state.connection.open) {
+        clearTimeout(state.connectionTimeout);
+        state.connectionTimeout = null;
+        state.onlineStatus = 'connected';
+      } else {
+        state.onlineStatus = 'connecting';
+        startConnectionTimeout(peer, state.connection);
+      }
       render();
-    });
-    state.connection.on('error', (error) => {
+      return;
+    }
+    try {
+      const connection = peer.connect(`chessclub-${normalized}`, { reliable: true });
+      state.connection = connection;
+      startConnectionTimeout(peer, connection);
+      wireConnection(connection);
+      render();
+    } catch (error) {
       console.error('Could not join online room:', error);
-      window.alert('Could not join that room. Check the code and try again.');
-      state.connection = null;
-      state.roomCode = '';
-      render();
-    });
+      failOnlineSession('Could not join that room. Check the code and try again.');
+    }
   });
-  state.peer.on('error', (error) => {
+  peer.on('disconnected', () => reconnectPeer(peer));
+  peer.on('error', (error) => {
+    if (state.peer !== peer) return;
     console.error('Online connection error:', error);
-    window.alert('Could not connect. Check your internet connection and try again.');
-    state.roomCode = '';
-    render();
+    if (error.type === 'network' || error.type === 'socket-error' || error.type === 'socket-closed') {
+      reconnectPeer(peer);
+      return;
+    }
+    failOnlineSession('Could not connect. Check your internet connection and try again.');
   });
   render();
 }
 
 function wireConnection(connection) {
+  const peer = state.peer;
   const sendProfile = () => {
+    if (state.connection !== connection || !connection.open) return;
+    clearTimeout(state.connectionTimeout);
+    state.connectionTimeout = null;
+    state.onlineStatus = 'connected';
+    state.onlineError = '';
     connection.send({ type: 'profile', name: state.names[state.side] });
+    render();
   };
   if (connection.open) sendProfile();
-  connection.on('open', () => {
-    sendProfile();
-    render();
-  });
+  else connection.on('open', sendProfile);
   connection.on('data', (data) => {
+    if (state.connection !== connection) return;
     if (data?.type === 'profile' && typeof data.name === 'string') {
       state.remoteName = data.name.trim().slice(0, 18) || 'Opponent';
       render();
@@ -561,8 +702,17 @@ function wireConnection(connection) {
     }
   });
   connection.on('close', () => {
+    if (state.connection !== connection) return;
+    clearTimeout(state.connectionTimeout);
+    state.connectionTimeout = null;
     state.connection = null;
+    state.onlineStatus = state.side === 'w' && state.peer === peer && !peer?.disconnected ? 'waiting' : 'disconnected';
     render();
+  });
+  connection.on('error', (error) => {
+    if (state.connection !== connection) return;
+    console.error('Online data connection error:', error);
+    failOnlineSession('The connection failed. Check your internet and try again.');
   });
 }
 
